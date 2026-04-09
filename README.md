@@ -56,7 +56,7 @@ python anonymizer/dicom_anonymize.py \
 ---
 
 ## Requirements
-- Python `3.9+`
+- `Python 3.9+`
 - `pydicom`
 - `pandas`
 - `matplotlib`, `seaborn` (for EDA visual reports)
