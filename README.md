@@ -1,4 +1,4 @@
-# DICOM Analysis & Anonymization Pipeline
+# DICOM Analysis & Anonymization Tool (DicomAnt)
 
 This repository provides an automated, secure pipeline for both **Exploratory Data Analysis (EDA)** and **Anonymization** of DICOM medical image datasets. The toolkit is specifically mapped out to prepare raw clinical data for Machine Learning model development and external multi-institutional research sharing.
 
