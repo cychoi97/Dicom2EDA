@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-dicom2EDA.py  (v1.0)
+dicom2EDA.py  (v1.1.0)
 
 All-in-one DICOM metadata extraction + automated EDA.
 
@@ -586,6 +586,19 @@ def _barh(ax, vc, max_items=20):
     ax.tick_params(axis="y", labelsize=8)
 
 
+def _cols_with_data_for_modality(df: pd.DataFrame, modality: str,
+                                  col_list: list) -> list:
+    """
+    Return the subset of col_list that have at least one non-null value
+    among rows where Modality == modality.
+
+    This prevents aggregating / plotting tags that simply do not exist for
+    a given modality (e.g. KVP is CT-specific and should not appear for MR).
+    """
+    sub = df[df["Modality"] == modality] if "Modality" in df.columns else df
+    return [c for c in col_list if c in sub.columns and sub[c].notna().any()]
+
+
 # ============================================================
 # EDA Section A – Dataset overview
 # ============================================================
@@ -659,39 +672,119 @@ def plot_overview(df, pdf, out_dir):
 # ============================================================
 
 def plot_missing_values(df, pdf, out_dir):
-    """B: Missing-value rate per column (horizontal bar chart).
+    """B: Missing-value analysis per column, broken down by Modality.
 
-    Layout: fixed 18 x 7 in widescreen; up to 40 columns shown,
-    bars drawn on the left half with annotation labels on the right.
+    Layout: widescreen 18 x 7 in.
+    - Left panel: heatmap of missing-rate per (Modality, column) so it is
+      immediately clear which tags are absent for which modality.
+      Columns that are 100 % missing across ALL modalities are excluded.
+    - Right panel: overall missing-rate bar chart for reference.
+
+    When Modality is not available the function falls back to the original
+    single-panel overall bar chart.
     """
-    # Exclude structural / derived columns from "expected" missing analysis
     skip = {"path", "patient_folder", "series_uid", "series_key",
             "series_label", "error", "PixelSpacing", "ImagerPixelSpacing"}
     cols = [c for c in df.columns if c not in skip]
-    miss = df[cols].isnull().mean().sort_values(ascending=False)
-    miss = miss[miss > 0]
+    miss_overall = df[cols].isnull().mean().sort_values(ascending=False)
+    miss_overall = miss_overall[miss_overall > 0]
 
-    if miss.empty:
+    if miss_overall.empty:
         print("  [B] No missing values found - skipping.")
         return
 
-    # Cap at 40 columns; fixed widescreen figure
-    miss   = miss.head(40)
-    fig, ax = plt.subplots(figsize=(18.0, 7.0))
+    has_modality = "Modality" in df.columns and df["Modality"].notna().any()
 
+    if not has_modality:
+        # ---- Fallback: original single-panel overall bar ----
+        miss = miss_overall.head(40)
+        fig, ax = plt.subplots(figsize=(18.0, 7.0))
+        colors = ["#E84545" if v > 0.5 else "#F7A440" if v > 0.2 else "#4B8BBE"
+                  for v in miss.values]
+        bars = ax.barh(miss.index[::-1], miss.values[::-1] * 100,
+                       color=colors[::-1], height=0.65)
+        ax.set_xlabel("Missing (%)", fontsize=10)
+        ax.set_xlim(0, 118)
+        ax.tick_params(axis="y", labelsize=8.5)
+        for bar, val in zip(bars, miss.values[::-1]):
+            ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
+                    f"{val*100:.1f}%", va="center", fontsize=8)
+        ax.grid(axis="x", alpha=0.3)
+        _fig_title(fig, "B · Missing Value Rate per Column", fontsize=13)
+        fig.tight_layout()
+        _save_fig(fig, pdf, out_dir, "B_missing_values")
+        print("  [B] Missing value heatmap saved.")
+        return
+
+    # ---- Per-modality missing-rate heatmap ----
+    # Only keep columns that are missing at least partially (overall),
+    # capped at 40 columns sorted by overall missing rate.
+    top_cols = miss_overall.head(40).index.tolist()
+    modalities = sorted(df["Modality"].dropna().unique())
+
+    # Build matrix: rows = modalities, cols = top_cols
+    # Each cell = fraction of rows for that modality where the column is null
+    miss_matrix = pd.DataFrame(index=modalities, columns=top_cols, dtype=float)
+    for mod in modalities:
+        sub = df[df["Modality"] == mod]
+        for col in top_cols:
+            if col in sub.columns:
+                miss_matrix.loc[mod, col] = sub[col].isnull().mean()
+            else:
+                miss_matrix.loc[mod, col] = 1.0   # column absent = treat as 100 % missing
+
+    # Drop columns whose missing rate is 0 % for ALL modalities
+    # (they add no information to the heatmap)
+    miss_matrix = miss_matrix.loc[:, miss_matrix.max(axis=0) > 0]
+
+    fig = plt.figure(figsize=(18.0, 7.0))
+    gs  = gridspec.GridSpec(1, 2, figure=fig, wspace=0.45,
+                            width_ratios=[2.2, 1])
+
+    # Left: per-modality heatmap
+    ax1 = fig.add_subplot(gs[0])
+    mat_vals = miss_matrix.values.astype(float) * 100   # % scale
+    if HAS_SNS:
+        sns.heatmap(
+            miss_matrix * 100, ax=ax1,
+            cmap="Reds", vmin=0, vmax=100,
+            annot=(miss_matrix.shape[0] * miss_matrix.shape[1] <= 120),
+            fmt=".0f", linewidths=0.3,
+            annot_kws={"size": 7},
+            cbar_kws={"label": "Missing (%)"},
+        )
+    else:
+        im = ax1.imshow(mat_vals, cmap="Reds", vmin=0, vmax=100, aspect="auto")
+        plt.colorbar(im, ax=ax1, label="Missing (%)")
+        ax1.set_xticks(range(len(miss_matrix.columns)))
+        ax1.set_xticklabels(miss_matrix.columns, rotation=45, ha="right", fontsize=7)
+        ax1.set_yticks(range(len(modalities)))
+        ax1.set_yticklabels(modalities, fontsize=8)
+    ax1.set_xlabel("Column", fontsize=9)
+    ax1.set_ylabel("Modality", fontsize=9)
+    ax1.set_title("B1 · Missing Rate by Modality (%)",
+                  fontweight="bold", fontsize=10)
+    ax1.tick_params(axis="x", rotation=45, labelsize=7)
+    ax1.tick_params(axis="y", labelsize=8)
+
+    # Right: overall missing rate bar (reference)
+    ax2 = fig.add_subplot(gs[1])
+    miss_bar = miss_overall.head(30)
     colors = ["#E84545" if v > 0.5 else "#F7A440" if v > 0.2 else "#4B8BBE"
-              for v in miss.values]
-    bars = ax.barh(miss.index[::-1], miss.values[::-1] * 100,
-                   color=colors[::-1], height=0.65)
-    ax.set_xlabel("Missing (%)", fontsize=10)
-    ax.set_xlim(0, 118)
-    ax.tick_params(axis="y", labelsize=8.5)
-    for bar, val in zip(bars, miss.values[::-1]):
-        ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
-                f"{val*100:.1f}%", va="center", fontsize=8)
-    ax.grid(axis="x", alpha=0.3)
+              for v in miss_bar.values]
+    bars = ax2.barh(miss_bar.index[::-1], miss_bar.values[::-1] * 100,
+                    color=colors[::-1], height=0.65)
+    ax2.set_xlabel("Missing (%) [all]", fontsize=9)
+    ax2.set_xlim(0, 118)
+    ax2.tick_params(axis="y", labelsize=7.5)
+    for bar, val in zip(bars, miss_bar.values[::-1]):
+        ax2.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
+                 f"{val*100:.0f}%", va="center", fontsize=7)
+    ax2.grid(axis="x", alpha=0.3)
+    ax2.set_title("B2 · Overall Missing Rate",
+                  fontweight="bold", fontsize=10)
 
-    _fig_title(fig, "B · Missing Value Rate per Column", fontsize=13)
+    _fig_title(fig, "B · Missing Value Rate  (per Modality + Overall)", fontsize=13)
     fig.tight_layout()
     _save_fig(fig, pdf, out_dir, "B_missing_values")
     print("  [B] Missing value heatmap saved.")
@@ -702,42 +795,67 @@ def plot_missing_values(df, pdf, out_dir):
 # ============================================================
 
 def plot_categorical(df, pdf, out_dir):
-    """C: Horizontal bar charts for key categorical columns.
+    """C: Horizontal bar charts for key categorical columns, split by Modality.
 
-    Layout: 4 columns across a widescreen figure (16:9 aspect ratio)
-    so the output fits naturally on a standard PPT slide.
+    One page per Modality is generated.  For each Modality only the columns
+    that actually have data for that modality are plotted (columns where every
+    value is null for the modality are silently skipped).
+
+    If Modality is not available the function falls back to a single page
+    covering all rows.
+
+    Layout per page: 4 columns × N rows (16:9 widescreen, 18 in wide).
     """
-    cats = [c for c in CATEGORICAL_COLS if c in df.columns and df[c].notna().any()]
-    if not cats:
-        print("  [C] No categorical columns found.")
-        return
+    has_modality = "Modality" in df.columns and df["Modality"].notna().any()
+    modalities   = (
+        sorted(df["Modality"].dropna().unique())
+        if has_modality else [None]
+    )
 
-    # 4-column wide layout: each row is compact, figure grows vertically only
-    # as needed.  Target ~2.8 in per row so the total height stays <= 10 in.
-    ncols     = 4
-    nrows     = math.ceil(len(cats) / ncols)
-    row_h_in  = 2.8          # height per row (inches)
-    fig_w_in  = 18.0         # fixed wide width (≈ PPT 16:9 scale)
-    fig_h_in  = max(3.5, nrows * row_h_in)
+    ncols    = 4
+    row_h_in = 2.8
+    fig_w_in = 18.0
 
-    fig, axes = plt.subplots(nrows, ncols,
-                             figsize=(fig_w_in, fig_h_in))
-    axes = np.array(axes).flatten()
+    for mod in modalities:
+        # Subset rows for this modality; if mod is None use full df
+        sub = df[df["Modality"] == mod].copy() if mod is not None else df.copy()
 
-    for i, col in enumerate(cats):
-        ax = axes[i]
-        vc = df[col].value_counts()
-        _barh(ax, vc, max_items=15)   # keep bars readable at smaller size
-        ax.set_title(col, fontsize=9, fontweight="bold")
-        ax.tick_params(axis="y", labelsize=7.5)
+        # Only keep categorical columns that have at least one non-null value
+        # for this modality — skips tags absent from this image type entirely
+        cats = [c for c in CATEGORICAL_COLS
+                if c in sub.columns and sub[c].notna().any()]
 
-    for j in range(len(cats), len(axes)):
-        axes[j].set_visible(False)
+        if not cats:
+            print(f"  [C] No categorical data for Modality={mod} - skipping.")
+            continue
 
-    fig.tight_layout()
-    _fig_title(fig, "C · Categorical Feature Distributions", fontsize=13)
-    _save_fig(fig, pdf, out_dir, "C_categorical")
-    print("  [C] Categorical distributions saved.")
+        nrows    = math.ceil(len(cats) / ncols)
+        fig_h_in = max(3.5, nrows * row_h_in)
+        fig, axes = plt.subplots(nrows, ncols,
+                                 figsize=(fig_w_in, fig_h_in))
+        axes = np.array(axes).flatten()
+
+        for i, col in enumerate(cats):
+            ax = axes[i]
+            vc = sub[col].value_counts()
+            _barh(ax, vc, max_items=15)
+            ax.set_title(col, fontsize=9, fontweight="bold")
+            ax.tick_params(axis="y", labelsize=7.5)
+
+        for j in range(len(cats), len(axes)):
+            axes[j].set_visible(False)
+
+        mod_label = mod if mod is not None else "All"
+        n_rows    = len(sub)
+        fig.tight_layout()
+        _fig_title(
+            fig,
+            f"C · Categorical Distributions  [Modality: {mod_label}]  (n={n_rows:,} files)",
+            fontsize=13,
+        )
+        stem = f"C_categorical_{mod_label}" if mod is not None else "C_categorical"
+        _save_fig(fig, pdf, out_dir, stem)
+        print(f"  [C] Categorical distributions saved for Modality={mod_label}.")
 
 
 # ============================================================
@@ -745,65 +863,90 @@ def plot_categorical(df, pdf, out_dir):
 # ============================================================
 
 def plot_numeric_dist(df, pdf, out_dir):
-    """D: Histogram + KDE for each numeric column (1st-99th pct clipped).
+    """D: Histogram + KDE per numeric column, split by Modality.
 
-    Layout: 5 columns in a single wide figure so every histogram fits
-    in a PPT-friendly landscape frame without excessive vertical space.
+    One page per Modality is generated.  For each Modality only the numeric
+    columns that actually contain data for that modality are plotted — tags
+    absent from a given modality (all-null) are silently excluded.
+
+    If Modality is not available the function produces a single combined page.
+
+    Layout per page: 5 columns in a fixed 18-inch wide figure (PPT-friendly).
     """
-    nums = [c for c in NUMERIC_COLS if c in df.columns and df[c].notna().any()]
-    nums = list(dict.fromkeys(nums))
+    has_modality = "Modality" in df.columns and df["Modality"].notna().any()
+    modalities   = (
+        sorted(df["Modality"].dropna().unique())
+        if has_modality else [None]
+    )
 
-    if not nums:
-        print("  [D] No numeric columns found.")
-        return
+    ncols    = 5
+    row_h_in = 2.8
+    fig_w_in = 18.0
 
-    # 5-column widescreen layout – row height kept compact
-    ncols     = 5
-    nrows     = math.ceil(len(nums) / ncols)
-    row_h_in  = 2.8          # compact row height
-    fig_w_in  = 18.0         # wide fixed width
-    fig_h_in  = max(3.0, nrows * row_h_in)
+    for mod in modalities:
+        # Subset rows; None means full df (fallback when Modality absent)
+        sub = df[df["Modality"] == mod].copy() if mod is not None else df.copy()
 
-    fig, axes = plt.subplots(nrows, ncols,
-                             figsize=(fig_w_in, fig_h_in))
-    axes = np.array(axes).flatten()
+        # Only include numeric columns that have at least one non-null value
+        # for this modality — avoids plotting empty histograms for CT-only tags
+        # when looking at MR, etc.
+        nums = [c for c in NUMERIC_COLS
+                if c in sub.columns and sub[c].notna().any()]
+        nums = list(dict.fromkeys(nums))  # preserve order, remove duplicates
 
-    for i, col in enumerate(nums):
-        ax     = axes[i]
-        series = df[col].dropna()
-        if series.empty:
-            ax.set_visible(False)
+        if not nums:
+            print(f"  [D] No numeric data for Modality={mod} - skipping.")
             continue
 
-        lo, hi  = series.quantile(0.01), series.quantile(0.99)
-        clipped = series.clip(lo, hi)
+        nrows    = math.ceil(len(nums) / ncols)
+        fig_h_in = max(3.0, nrows * row_h_in)
+        fig, axes = plt.subplots(nrows, ncols,
+                                 figsize=(fig_w_in, fig_h_in))
+        axes = np.array(axes).flatten()
 
-        if HAS_SNS:
-            sns.histplot(clipped, kde=True, ax=ax, color="#4B8BBE",
-                         edgecolor="white", linewidth=0.4)
-        else:
-            ax.hist(clipped, bins=30, color="#4B8BBE",
-                    edgecolor="white", linewidth=0.4)
+        for i, col in enumerate(nums):
+            ax     = axes[i]
+            series = sub[col].dropna()
+            if series.empty:
+                ax.set_visible(False)
+                continue
 
-        med = series.median()
-        std = series.std()
-        ax.axvline(med, color="red", linestyle="--", linewidth=1.2,
-                   label=f"med={med:.3g}")
-        ax.legend(fontsize=6.5)
-        ax.set_title(f"{col}\n(n={len(series):,}  σ={std:.3g})",
-                     fontsize=7.5, fontweight="bold")
-        ax.set_ylabel("Count", fontsize=7)
-        ax.tick_params(labelsize=6.5)
-        ax.grid(axis="y", alpha=0.3)
+            lo, hi  = series.quantile(0.01), series.quantile(0.99)
+            clipped = series.clip(lo, hi)
 
-    for j in range(len(nums), len(axes)):
-        axes[j].set_visible(False)
+            if HAS_SNS:
+                sns.histplot(clipped, kde=True, ax=ax, color="#4B8BBE",
+                             edgecolor="white", linewidth=0.4)
+            else:
+                ax.hist(clipped, bins=30, color="#4B8BBE",
+                        edgecolor="white", linewidth=0.4)
 
-    fig.tight_layout()
-    _fig_title(fig, "D · Numeric Feature Distributions  (1st-99th pct clipped for display)",
-               fontsize=12)
-    _save_fig(fig, pdf, out_dir, "D_numeric_distributions")
-    print("  [D] Numeric distributions saved.")
+            med = series.median()
+            std = series.std()
+            ax.axvline(med, color="red", linestyle="--", linewidth=1.2,
+                       label=f"med={med:.3g}")
+            ax.legend(fontsize=6.5)
+            ax.set_title(f"{col}\n(n={len(series):,}  \u03c3={std:.3g})",
+                         fontsize=7.5, fontweight="bold")
+            ax.set_ylabel("Count", fontsize=7)
+            ax.tick_params(labelsize=6.5)
+            ax.grid(axis="y", alpha=0.3)
+
+        for j in range(len(nums), len(axes)):
+            axes[j].set_visible(False)
+
+        mod_label = mod if mod is not None else "All"
+        n_rows    = len(sub)
+        fig.tight_layout()
+        _fig_title(
+            fig,
+            f"D · Numeric Distributions  [Modality: {mod_label}]  (n={n_rows:,} files)  "
+            f"(1st-99th pct clipped for display)",
+            fontsize=11,
+        )
+        stem = f"D_numeric_{mod_label}" if mod is not None else "D_numeric_distributions"
+        _save_fig(fig, pdf, out_dir, stem)
+        print(f"  [D] Numeric distributions saved for Modality={mod_label}.")
 
 
 # ============================================================

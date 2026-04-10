@@ -1,6 +1,6 @@
 # DICOM2EDA
 
-> **All-in-one DICOM metadata extraction + automated EDA pipeline**  
+> **All-in-one DICOM metadata extraction + automated EDA pipeline** (v1.1.0)
 > Scan a directory tree of DICOM files, extract structured metadata into a tidy DataFrame, and generate a comprehensive EDA report (PDF + individual PNGs) — in a single command.
 
 ---
@@ -13,10 +13,11 @@
 | **Hierarchy-aware** | Configurable patient-folder depth (`--patient-depth`) for nested datasets |
 | **DICOM-header series grouping** | Series are discriminated by `SeriesInstanceUID`, `SeriesNumber`, `SeriesDescription` — independent of folder layout |
 | **Mixed-series support** | Multiple modalities / series can coexist in the same directory |
-| **Slice position tracking** | `SlicePositionInSeries` (0–100 %) computed per series without loading pixels |
+| **Slice position tracking** | `SlicePositionInSeries` (0–100 %) computed per series without loading pixels |
 | **9-section EDA report** | Auto-generated multi-page PDF + standalone PNGs at 300 DPI |
-| **Visual gallery (Section J)** | Loads actual pixel data to display representative thumbnails per `SeriesDescription` |
-| **Widescreen-ready figures** | **All** EDA sections (A–J) output at 300 DPI in 16:9 landscape format (fixed 18 in wide), optimized for direct insertion into PowerPoint slides |
+| **Modality-aware analysis** | Sections B, C, D automatically split by Modality — tags absent for a given modality are silently excluded from that modality’s plots |
+| **Visual gallery (Section I)** | Loads actual pixel data to display representative thumbnails per `SeriesDescription` |
+| **Widescreen-ready figures** | **All** EDA sections (A–I) output at 300 DPI in 16:9 landscape format (fixed 18 in wide), optimized for direct insertion into PowerPoint slides |
 | **CSV / Parquet output** | Flat metadata table saved alongside the report |
 
 ---
@@ -43,15 +44,15 @@ For multi-site datasets (e.g. `root/site/patient/`), set `--patient-depth 2`.
 
 | Section | Title | Layout | Description |
 |---------|-------|--------|-------------|
-| **A** | Dataset Overview | 18 × 5.5 in · 2 side-by-side tables | File count, error count, total size, unique patients / studies / series / modalities, avg series per patient |
-| **B** | Missing Value Rate | 18 × 7 in · single wide chart | Horizontal bar chart of missing-value (%) per column (up to 40), colour-coded by severity |
-| **C** | Categorical Distributions | 18 in wide · **4-col** grid | Bar charts for Modality, SeriesDescription, BodyPart, Manufacturer, PatientSex, etc. |
-| **D** | Numeric Distributions | 18 in wide · **5-col** grid | Histogram + KDE for KVP, SliceThickness, PixelSpacing, Exposure, etc. (1st–99th pct clipped) |
-| **E** | Image Geometry | 18 × 6 in · 2-panel (70/30 split) | Rows × Columns hexbin scatter + BitsStored distribution |
-| **F** | Series-Level Analysis | 18 × 7 in · **1-row × 4-col** | F1 slice count histogram · F2 series count per patient · F3 top-15 SeriesDescription · F4 modality distribution |
-| **G** | Patient Composition | 18 × 7 in · 2-panel (65/35 split) | G1 patient × modality heatmap · G2 modality combination frequency |
-| **H** | Patient Demographics | 18 × 7 in · 1 or 2 side-by-side | PatientSex pie chart + PatientAge histogram (de-duplicated by DICOM `PatientID`) |
-| **I** | SeriesDescription Gallery | 18 in wide · **6-col** grid | Pixel thumbnails for top-N unique `SeriesDescription` labels with acquisition metadata overlay |
+| **A** | Dataset Overview | 18 × 5.5 in · 2 side-by-side tables | File count, error count, total size, unique patients / studies / series / modalities, avg series per patient |
+| **B** | Missing Value Rate | 18 × 7 in · 2-panel | **B1** Modality × Column missing-rate heatmap · **B2** overall missing-rate bar chart. Tags 100 % absent across all modalities are hidden from the heatmap. Falls back to single bar chart if `Modality` is unavailable. |
+| **C** | Categorical Distributions | 18 in wide · **4-col** grid · **one page per Modality** | Bar charts for Modality, SeriesDescription, BodyPart, Manufacturer, PatientSex, etc. Only columns with data for the given modality are shown. |
+| **D** | Numeric Distributions | 18 in wide · **5-col** grid · **one page per Modality** | Histogram + KDE for KVP, SliceThickness, PixelSpacing, Exposure, etc. (1st–99th pct clipped). Only numeric tags with data for the given modality are plotted. |
+| **E** | Image Geometry | 18 × 6 in · 2-panel (70/30 split) | Rows × Columns hexbin scatter + BitsStored distribution |
+| **F** | Series-Level Analysis | 18 × 7 in · **1-row × 4-col** | F1 slice count histogram · F2 series count per patient · F3 top-15 SeriesDescription · F4 modality distribution |
+| **G** | Patient Composition | 18 × 7 in · 2-panel (65/35 split) | G1 patient × modality heatmap · G2 modality combination frequency |
+| **H** | Patient Demographics | 18 × 7 in · 1 or 2 side-by-side | PatientSex pie chart + PatientAge histogram (de-duplicated by DICOM `PatientID`) |
+| **I** | SeriesDescription Gallery | 18 in wide · **6-col** grid | Pixel thumbnails for top-N unique `SeriesDescription` labels with acquisition metadata overlay |
 
 ---
 
@@ -113,8 +114,8 @@ python dicom2EDA.py --dicom-dir /path/to/data --out-dir ./eda_output \
 | `--one-slice-per-series` | `False` | Extract only one representative DICOM per `(patient, SeriesUID)` |
 | `--rep-policy` | `auto` | Slice selection policy: `auto` (middle) · `first` · `middle` · `last` |
 | `--no-plots` | `False` | Skip all plotting; save CSV/Parquet only |
-| `--no-gallery` | `False` | Skip Section J pixel gallery |
-| `--max-series-preview` | `24` | Max unique `SeriesDescription` thumbnails shown in Section J |
+| `--no-gallery` | `False` | Skip Section I pixel gallery |
+| `--max-series-preview` | `24` | Max unique `SeriesDescription` thumbnails shown in Section I |
 
 ---
 
@@ -122,18 +123,23 @@ python dicom2EDA.py --dicom-dir /path/to/data --out-dir ./eda_output \
 
 ```
 eda_output/
-  metadata.csv          ← flat per-file metadata table
-  eda_report.pdf        ← multi-page EDA report (all sections)
+  metadata.csv               ← flat per-file metadata table
+  eda_report.pdf             ← multi-page EDA report (all sections)
   A_overview.png
-  B_missing_values.png
-  C_categorical.png
-  D_numeric_distributions.png
+  B_missing_values.png       ← Modality×Column heatmap + overall bar
+  C_categorical_CT.png       ← one PNG per Modality (e.g. CT, MR, CR …)
+  C_categorical_MR.png
+  D_numeric_CT.png           ← one PNG per Modality
+  D_numeric_MR.png
   E_image_geometry.png
   F_series_analysis.png
   G_patient_composition.png
   H_demographics.png
-  I_series_gallery.png  ← pixel thumbnails (skipped with --no-gallery)
+  I_series_gallery.png       ← pixel thumbnails (skipped with --no-gallery)
 ```
+
+> **Note:** If `Modality` is absent from the dataset, Sections C and D
+> fall back to a single combined file (`C_categorical.png` / `D_numeric_distributions.png`).
 
 ---
 
@@ -205,16 +211,17 @@ Use `--no-gallery` to skip this section when pixel data is unavailable or access
 - DICOM files are detected by extension (`.dcm`, `.dicom`) **or by having no extension at all** (common in PACS exports).
 - A `.npy` file containing a Python list of absolute paths can be passed to `--dicom-dir` for pre-filtered datasets.
 - All figures are saved at **300 DPI** in a fixed **18-inch wide** landscape size (16:9). Each section height is either fixed or gently capped so no figure exceeds roughly 12 inches tall — making every output suitable for direct insertion into a 16:9 PowerPoint slide.
+- **Modality-aware analysis (v1.1):** Sections B, C, D group data by `Modality` before plotting. Tags that are entirely absent (all-null) for a given modality are excluded from that modality’s figure. This prevents CT-specific tags (e.g. `KVP`, `Exposure`) from appearing in MR plots as empty bars/histograms, and vice versa.
 - Per-section layout summary:
 
-  | Section | Width | Height | Grid |
-  |---------|-------|--------|------|
-  | A | 18 in | 5.5 in | 1 × 2 sub-tables |
-  | B | 18 in | 7 in | 1-panel bar chart |
-  | C | 18 in | dynamic (2.8 in × rows) | 4 col |
-  | D | 18 in | dynamic (2.8 in × rows) | 5 col |
-  | E | 18 in | 6 in | 1 × 2 (70/30) |
-  | F | 18 in | 7 in | 1 × 4 (single row) |
-  | G | 18 in | 7 in | 1 × 2 (65/35) |
-  | H | 18 in | 7 in | 1 × 1 or 1 × 2 |
-  | I | 18 in | dynamic | 6 col |
+  | Section | Width | Height | Grid | Modality split? |
+  |---------|-------|--------|------|-----------------|
+  | A | 18 in | 5.5 in | 1 × 2 sub-tables | — |
+  | B | 18 in | 7 in | 2-panel heatmap + bar | ✓ (heatmap rows = modalities) |
+  | C | 18 in | dynamic (2.8 in × rows) | 4 col | ✓ (one page per modality) |
+  | D | 18 in | dynamic (2.8 in × rows) | 5 col | ✓ (one page per modality) |
+  | E | 18 in | 6 in | 1 × 2 (70/30) | — |
+  | F | 18 in | 7 in | 1 × 4 (single row) | — |
+  | G | 18 in | 7 in | 1 × 2 (65/35) | — |
+  | H | 18 in | 7 in | 1 × 1 or 1 × 2 | — |
+  | I | 18 in | dynamic | 6 col | — |

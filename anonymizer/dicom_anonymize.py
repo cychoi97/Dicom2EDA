@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-dicom_anonymize.py  (v1.0)
+dicom_anonymize.py  (v1.0.1)
 
 DICOM anonymisation pipeline.
 
@@ -71,12 +71,10 @@ logger = logging.getLogger(__name__)
 # Tags to overwrite with an empty string (tag is kept in the file, value blanked).
 # Source: 07.LDCT2NDCT/jupyter_lab/dicom_anonymizer.py  +  AccessionNumber added.
 TAGS_TO_BLANK: list[tuple[int, int]] = [
-    (0x0008, 0x0070),  # Manufacturer
     (0x0008, 0x0080),  # InstitutionName
     (0x0008, 0x0081),  # InstitutionAddress
     (0x0008, 0x0090),  # ReferringPhysicianName
     (0x0008, 0x1050),  # PerformingPhysicianName
-    (0x0008, 0x1090),  # ManufacturerModelName
     # PatientName (0x0010,0x0010) is replaced with anon_id, not just blanked
     (0x0018, 0x1020),  # SoftwareVersions
     (0x0008, 0x1070),  # OperatorsName
@@ -91,6 +89,9 @@ TAGS_TO_BLANK: list[tuple[int, int]] = [
 TAGS_TO_TRUNCATE_DATE: list[tuple[int, int]] = [
     (0x0008, 0x0020),  # StudyDate
     (0x0008, 0x0021),  # SeriesDate
+    (0x0008, 0x0022),  # AcquisitionDate
+    (0x0008, 0x0023),  # ContentDate
+    (0x0008, 0x002a),  # AcquisitionDateTime
     (0x0010, 0x0030),  # PatientBirthDate
 ]
 

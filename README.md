@@ -56,8 +56,52 @@ python anonymizer/dicom_anonymize.py \
 ---
 
 ## Requirements
-- `Python 3.9+`
+- Python `3.9+`
 - `pydicom`
 - `pandas`
 - `matplotlib`, `seaborn` (for EDA visual reports)
 - `tqdm`, `natsort`
+
+---
+
+## Changelog
+
+### dicom2EDA
+
+#### v1.1.0 — 2026-04-10
+- **Modality-aware analysis**: Sections B, C, D now split data by `Modality` before plotting.
+  - Tags that are entirely absent (all-null) for a given modality are silently excluded from that modality's figure — e.g. `KVP`/`Exposure` will not appear in MR plots.
+  - **Section B** redesigned as a 2-panel figure: `B1` Modality × Column missing-rate heatmap + `B2` overall missing-rate bar chart.
+  - **Section C** (Categorical): one PDF page / PNG file per Modality (e.g. `C_categorical_CT.png`, `C_categorical_MR.png`).
+  - **Section D** (Numeric): one PDF page / PNG file per Modality (e.g. `D_numeric_CT.png`, `D_numeric_MR.png`).
+  - Falls back to the original single-combined output when `Modality` is unavailable.
+- Added internal helper `_cols_with_data_for_modality()` for reusable per-modality column filtering.
+
+#### v1.0.0 — 2026-04-02
+- Initial release.
+- Hierarchical DICOM parsing with `--patient-depth` option.
+- Header-based series grouping via `SeriesInstanceUID`.
+- 9-section EDA report (A–I) saved as PDF + individual PNGs at 300 DPI.
+- All figures use fixed 18-inch wide widescreen (16:9) layout optimized for PowerPoint.
+- Section I: `SeriesDescription` visual gallery with pixel thumbnails and windowing.
+- Privacy-safe by default: SHA-256 hashing for PHI tags, date coarsening to YYYYMM.
+- `--keep-phi`, `--one-slice-per-series`, `--rep-policy`, `--no-gallery` CLI options.
+
+---
+
+### anonymizer
+
+#### v1.0.1 — 2026-04-10
+- Removed `Manufacturer` (0x0008,0x0070) and `ManufacturerModelName` (0x0008,0x1090) from `TAGS_TO_BLANK` — these are non-PHI device identifiers needed for downstream EDA/model conditioning.
+- Added `AcquisitionDate` (0x0008,0x0022), `ContentDate` (0x0008,0x0023), and `AcquisitionDateTime` (0x0008,0x002a) to `TAGS_TO_TRUNCATE_DATE` — dates are coarsened to `YYYYMM` for consistency with `StudyDate`/`SeriesDate`/`PatientBirthDate`.
+
+#### v1.0.0 — 2026-03-26
+- Initial release.
+- Sequential anonymous IDs (`ANON_001`, `ANON_002`, …) assigned per patient folder.
+- DICOM files renamed to zero-padded slice order (`0001.dcm`, `0002.dcm`, …).
+- PHI tag blanking (institution, physician, station, device identifiers).
+- Date/time coarsening: `StudyDate`, `SeriesDate`, `PatientBirthDate` → `YYYYMM`; `StudyTime`/`SeriesTime` removed.
+- `PatientName` replaced with anonymous ID; `PatientID` and `PatientBirthDate` blanked.
+- Folder-name sanitization: patient identifiers stripped from directory names.
+- `mapping_log.csv` output linking original paths/IDs to anonymized equivalents.
+- `--patient-depth`, `--prefix`, `--dry-run`, `--log` CLI options.
