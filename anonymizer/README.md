@@ -1,6 +1,6 @@
 # DICOM Anonymize
 
-> **DICOM Data Anonymisation & Path Sanitisation Pipeline**  
+> **DICOM Data Anonymisation & Path Sanitisation Pipeline** (v1.0.1)
 > Recursively scan a directory of DICOM files, assign sequential anonymous IDs, safely scrub DICOM header tags, strip patient identifiers from folder names, and reorganize files by series.
 
 ---
@@ -126,10 +126,10 @@ anon_output/
 
 2. **Explicit Tag Blanking**  
 The following tags persist in the DICOM but their strings are wiped (`""`):  
-`Manufacturer`, `InstitutionName`, `InstitutionAddress`, `ReferringPhysicianName`, `PerformingPhysicianName`, `ManufacturerModelName`, `SoftwareVersions`, `OperatorsName`, `StationName`, `DeviceSerialNumber`, `RequestingPhysician`, `AccessionNumber`.
+`InstitutionName`, `InstitutionAddress`, `ReferringPhysicianName`, `PerformingPhysicianName`, `SoftwareVersions`, `OperatorsName`, `StationName`, `DeviceSerialNumber`, `RequestingPhysician`, `AccessionNumber`.
 
 3. **Date/Time Coarsening**  
-- **StudyDate, SeriesDate, PatientBirthDate**: Retain the first 6 characters (`YYYYMM`).  
+- **StudyDate, SeriesDate, PatientBirthDate, AcquisitionDate, ContentDate, AcquisitionDateTime**: Retain the first 6 characters (`YYYYMM`).  
 - **StudyTime, SeriesTime**: Tag is completely removed.
 
 4. **Retained Fields**  
